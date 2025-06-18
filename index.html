@@ -632,7 +632,11 @@ let currentCenter = calculateCenterFromCoords(currentCoords, originalFeature.geo
         map.getContainer().style.cursor = 'grabbing';
         L.DomEvent.stopPropagation(e);
     });
-
+// Recalculate current position before dragging
+const currentLatLngs = layer.getLatLngs();
+currentCoords = latLngsToCoords(currentLatLngs, originalFeature.geometry.type);
+currentCenter = calculateCenterFromCoords(currentCoords, originalFeature.geometry.type);
+	
     map.on('mousemove', function(e) {
         if (!isDragging) return;
         
@@ -640,8 +644,8 @@ let currentCenter = calculateCenterFromCoords(currentCoords, originalFeature.geo
         const deltaLat = currentLatLng.lat - dragStartLatLng.lat;
         const deltaLng = currentLatLng.lng - dragStartLatLng.lng;
         
-        const newCenter = L.latLng(originalCenter.lat + deltaLat, originalCenter.lng + deltaLng);
-        const transformedCoords = transformCoordinates(originalCoords, originalCenter, newCenter, originalFeature.geometry.type);
+        const newCenter = L.latLng(currentCenter.lat + deltaLat, currentCenter.lng + deltaLng);
+        const transformedCoords = transformCoordinates(currentCoords, currentCenter, newCenter, originalFeature.geometry.type);
         const newLatLngs = coordsToLatLngs(transformedCoords, originalFeature.geometry.type);
         layer.setLatLngs(newLatLngs);
     });
