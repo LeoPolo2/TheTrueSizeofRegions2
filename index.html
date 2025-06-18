@@ -153,6 +153,35 @@
             margin-right: 6px;
             border-radius: 1px;
         }
+        
+        /* Loading Spinner */
+        #loader {
+            position: absolute;
+            left: 50%;
+            top: 50%;
+            z-index: 1001;
+            width: 120px;
+            height: 120px;
+            margin: -76px 0 0 -76px;
+            border: 16px solid #f3f3f3;
+            border-radius: 50%;
+            border-top: 16px solid #3498db;
+            width: 60px;
+            height: 60px;
+            -webkit-animation: spin 2s linear infinite;
+            animation: spin 2s linear infinite;
+            display: none; /* Hidden by default */
+        }
+
+        @-webkit-keyframes spin {
+          0% { -webkit-transform: rotate(0deg); }
+          100% { -webkit-transform: rotate(360deg); }
+        }
+
+        @keyframes spin {
+          0% { transform: rotate(0deg); }
+          100% { transform: rotate(360deg); }
+        }
     </style>
 </head>
 <body>
@@ -164,6 +193,7 @@
         <button id="clear-button">Clear Map</button>
     </div>
     <div id="map"></div>
+    <div id="loader"></div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
      integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
@@ -175,15 +205,33 @@ let colorIndex = 0;
 
 // --- 1. INITIALIZE THE MAP ---
 const map = L.map('map').setView([20, 0], 2);
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+
+const openStreetMap = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: 19,
     attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-}).addTo(map);
+});
+
+const darkMap = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+	attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+	subdomains: 'abcd',
+	maxZoom: 19
+});
+
+openStreetMap.addTo(map);
+
+const baseMaps = {
+    "Street Map": openStreetMap,
+    "Dark Map": darkMap
+};
+
+L.control.layers(baseMaps).addTo(map);
+
 
 // --- 2. SETUP SEARCH AND DATA LOADING ---
 const searchBox = document.getElementById('search-box');
 const searchResults = document.getElementById('search-results');
 const clearButton = document.getElementById('clear-button');
+const loader = document.getElementById('loader');
 
 let searchableData = [];
 let geojsonLayers = {};
@@ -197,7 +245,7 @@ loadInitialData();
 async function loadInitialData() {
     try {
         // Load countries from Natural Earth API (high resolution)
-        const countriesResponse = await fetch('https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_50m_admin_0_countries.geojson');
+        const countriesResponse = await fetch('https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_10m_admin_0_countries.geojson');
         const countries = await countriesResponse.json();
         
         // Process countries with flag support
@@ -251,6 +299,7 @@ async function loadFromBackupSource() {
 
 function addPredefinedStates() {
     const popularStates = [
+        // Add more states and provinces here
         // US States
         { name: 'California', type: 'US State', country: 'US', adminLevel: 4 },
         { name: 'Texas', type: 'US State', country: 'US', adminLevel: 4 },
@@ -285,6 +334,9 @@ function addPredefinedStates() {
         { name: 'Maharashtra', type: 'State', country: 'IN', adminLevel: 4 },
         { name: 'São Paulo', type: 'State', country: 'BR', adminLevel: 4 },
         { name: 'Rio de Janeiro', type: 'State', country: 'BR', adminLevel: 4 },
+        { name: 'Michoacan', type: 'State', country: 'MX', adminLevel: 4 },
+        { name: 'Siberian Federal District', type: 'Federal District', country: 'RU', adminLevel: 3 },
+        { name: 'Taitung', type: 'County', country: 'TW', adminLevel: 6 },
     ];
 
     popularStates.forEach(state => {
@@ -323,6 +375,9 @@ searchBox.addEventListener('keydown', (e) => {
             results[selectedIndex].click();
         } else if (results.length > 0) {
             results[0].click();
+        } else {
+            // If no results, search with API
+            handleSelection({ name: searchBox.value, type: 'Region', loadType: 'api' });
         }
     } else if (e.key === 'Escape') {
         searchResults.innerHTML = '';
@@ -341,7 +396,7 @@ function displaySearchResults(query) {
     if (results.length === 0) {
         const div = document.createElement('div');
         div.className = 'no-results';
-        div.textContent = 'No results found';
+        div.textContent = `No pre-loaded results. Press Enter to search for "${searchBox.value}"`;
         searchResults.appendChild(div);
         return;
     }
@@ -404,11 +459,11 @@ async function handleSelection(item) {
 }
 
 function showLoading() {
-    searchResults.innerHTML = '<div class="loading">Loading...</div>';
+    loader.style.display = 'block';
 }
 
 function hideLoading() {
-    searchResults.innerHTML = '';
+    loader.style.display = 'none';
 }
 
 function showError(message) {
@@ -427,12 +482,12 @@ async function loadFromOverpassAPI(item) {
     }
 
     try {
-        // Enhanced Overpass query with better filtering
+        const adminLevelQuery = item.adminLevel ? `["admin_level"="${item.adminLevel}"]` : '';
         const query = `
-            [out:json][timeout:20];
+            [out:json][timeout:25];
             (
-              relation["name"~"${item.name}"]["admin_level"="${item.adminLevel}"]["boundary"="administrative"];
-              relation["name:en"~"${item.name}"]["admin_level"="${item.adminLevel}"]["boundary"="administrative"];
+              relation["name"~"${item.name}"]["boundary"="administrative"]${adminLevelQuery};
+              relation["name:en"~"${item.name}"]["boundary"="administrative"]${adminLevelQuery};
             );
             out geom;
         `;
@@ -485,7 +540,7 @@ function findBestMatch(elements, targetName) {
 
 async function loadFromNominatim(item) {
     try {
-        const query = `${item.name}, ${getCountryFullName(item.country)}`;
+        const query = item.country ? `${item.name}, ${getCountryFullName(item.country)}` : item.name;
         const response = await fetch(
             `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=geojson&polygon_geojson=1&limit=1&addressdetails=1`
         );
@@ -531,8 +586,8 @@ async function overpassToGeoJSON(element) {
                 admin_level: element.tags.admin_level
             },
             geometry: {
-                type: coordinates.length === 1 ? 'Polygon' : 'MultiPolygon',
-                coordinates: coordinates.length === 1 ? coordinates : [coordinates]
+                type: 'Polygon',
+                coordinates: coordinates
             }
         };
     } catch (error) {
@@ -547,16 +602,18 @@ function createDraggableClone(geojsonFeature, item) {
         color: palette[colorIndex % palette.length],
         weight: 2,
         fillColor: palette[colorIndex % palette.length],
-        fillOpacity: 0.5,
-        interactive: true
+        fillOpacity: 0.6,
+        interactive: true,
+        fill: true
     };
     colorIndex++;
 
     const clone = L.geoJSON(geojsonFeature, { 
         style: style,
         onEachFeature: function(feature, layer) {
-            makeDraggable(layer, feature);
-            
+            layer.dragging = new L.Draggable(layer._path);
+            layer.dragging.enable();
+
             // Add tooltip with flag
             const tooltipContent = createTooltipContent(item);
             layer.bindTooltip(tooltipContent, {
@@ -602,144 +659,12 @@ clearButton.addEventListener('click', () => {
 });
 
 // --- 8. DRAGGING FUNCTIONALITY ---
-function makeDraggable(layer, originalFeature) {
-    let isDragging = false;
-    let dragStartLatLng = null;
-    
-    const originalCoords = JSON.parse(JSON.stringify(originalFeature.geometry.coordinates));
-    const originalCenter = calculateCenterFromCoords(originalCoords, originalFeature.geometry.type);
-    
-    layer.on('mousedown', function(e) {
-        isDragging = true;
-        dragStartLatLng = e.latlng;
-        map.dragging.disable();
-        map.off('click');
-        map.getContainer().style.cursor = 'grabbing';
-        L.DomEvent.stopPropagation(e);
-    });
-
-    map.on('mousemove', function(e) {
-        if (!isDragging) return;
-        
-        const currentLatLng = e.latlng;
-        const deltaLat = currentLatLng.lat - dragStartLatLng.lat;
-        const deltaLng = currentLatLng.lng - dragStartLatLng.lng;
-        
-        const newCenter = L.latLng(originalCenter.lat + deltaLat, originalCenter.lng + deltaLng);
-        const transformedCoords = transformCoordinates(originalCoords, originalCenter, newCenter, originalFeature.geometry.type);
-        const newLatLngs = coordsToLatLngs(transformedCoords, originalFeature.geometry.type);
-        layer.setLatLngs(newLatLngs);
-    });
-
-    map.on('mouseup', function() {
-        if (isDragging) {
-            isDragging = false;
-            map.dragging.enable();
-            map.getContainer().style.cursor = '';
-        }
-    });
-
-    map.on('mouseleave', function() {
-        if (isDragging) {
-            isDragging = false;
-            map.dragging.enable();
-            map.getContainer().style.cursor = '';
-        }
-    });
-}
+// Replaced with Leaflet's built-in dragging for simplicity and reliability
 
 // --- 9. COORDINATE TRANSFORMATION ---
-function transformCoordinates(coords, originalCenter, newCenter, geometryType) {
-    const deltaLat = newCenter.lat - originalCenter.lat;
-    const deltaLng = newCenter.lng - originalCenter.lng;
-    
-    let translatedCoords;
-    if (geometryType === 'Polygon') {
-        translatedCoords = coords.map(ring => 
-            ring.map(coord => [coord[0] + deltaLng, coord[1] + deltaLat])
-        );
-    } else if (geometryType === 'MultiPolygon') {
-        translatedCoords = coords.map(polygon =>
-            polygon.map(ring => 
-                ring.map(coord => [coord[0] + deltaLng, coord[1] + deltaLat])
-            )
-        );
-    }
-    
-    return applyMercatorCorrection(translatedCoords, originalCenter, newCenter, geometryType);
-}
-
-function applyMercatorCorrection(coords, originalCenter, newCenter, geometryType) {
-    const originalLat = Math.abs(originalCenter.lat);
-    const newLat = Math.abs(newCenter.lat);
-    
-    const clampedOriginalLat = Math.min(Math.max(originalLat, 0.1), 85);
-    const clampedNewLat = Math.min(Math.max(newLat, 0.1), 85);
-    
-    const originalScale = 1 / Math.cos(clampedOriginalLat * Math.PI / 180);
-    const newScale = 1 / Math.cos(clampedNewLat * Math.PI / 180);
-    const scaleFactor = newScale / originalScale;
-    
-    if (Math.abs(scaleFactor - 1) < 0.01) {
-        return coords;
-    }
-    
-    function scaleRing(ring) {
-        return ring.map(coord => {
-            const dLng = coord[0] - newCenter.lng;
-            const dLat = coord[1] - newCenter.lat;
-            
-            return [
-                newCenter.lng + dLng * scaleFactor,
-                newCenter.lat + dLat
-            ];
-        });
-    }
-    
-    if (geometryType === 'Polygon') {
-        return coords.map(ring => scaleRing(ring));
-    } else if (geometryType === 'MultiPolygon') {
-        return coords.map(polygon => 
-            polygon.map(ring => scaleRing(ring))
-        );
-    }
-    
-    return coords;
-}
+// No longer needed due to using Leaflet's built-in dragging
 
 // --- 10. HELPER FUNCTIONS ---
-function calculateCenterFromCoords(coords, geometryType) {
-    let totalLat = 0, totalLng = 0, count = 0;
-    
-    function processRing(ring) {
-        ring.forEach(coord => {
-            totalLng += coord[0];
-            totalLat += coord[1];
-            count++;
-        });
-    }
-    
-    if (geometryType === 'Polygon') {
-        coords.forEach(ring => processRing(ring));
-    } else if (geometryType === 'MultiPolygon') {
-        coords.forEach(polygon => {
-            polygon.forEach(ring => processRing(ring));
-        });
-    }
-    
-    return L.latLng(totalLat / count, totalLng / count);
-}
-
-function coordsToLatLngs(coords, geometryType) {
-    if (geometryType === 'Polygon') {
-        return coords.map(ring => ring.map(coord => L.latLng(coord[1], coord[0])));
-    } else if (geometryType === 'MultiPolygon') {
-        return coords.map(polygon => 
-            polygon.map(ring => ring.map(coord => L.latLng(coord[1], coord[0])))
-        );
-    }
-}
-
 function getFlagUrl(countryCode) {
     if (!countryCode) return '';
     return `https://flagcdn.com/24x18/${countryCode.toLowerCase()}.png`;
@@ -756,13 +681,17 @@ function getCountryFullName(code) {
         'FR': 'France',
         'GB': 'United Kingdom',
         'IN': 'India',
-        'BR': 'Brazil'
+        'BR': 'Brazil',
+        'MX': 'Mexico',
+        'RU': 'Russia',
+        'TW': 'Taiwan'
     };
     return countries[code] || code;
 }
 
 function getCountryCode(countryName) {
     const codes = {
+        'United States of America': 'US',
         'United States': 'US',
         'Canada': 'CA',
         'Australia': 'AU',
@@ -772,9 +701,17 @@ function getCountryCode(countryName) {
         'France': 'FR',
         'United Kingdom': 'GB',
         'India': 'IN',
-        'Brazil': 'BR'
+        'Brazil': 'BR',
+        'Mexico': 'MX',
+        'Russia': 'RU',
+        'Taiwan': 'TW'
     };
-    return codes[countryName] || '';
+    for (const name in codes) {
+        if (countryName.includes(name)) {
+            return codes[name];
+        }
+    }
+    return '';
 }
 
 // Hide search results when clicking outside
