@@ -631,12 +631,12 @@ let currentCenter = calculateCenterFromCoords(currentCoords, originalFeature.geo
         map.off('click');
         map.getContainer().style.cursor = 'grabbing';
         L.DomEvent.stopPropagation(e);
-    });
+    
 // Recalculate current position before dragging
 const currentLatLngs = layer.getLatLngs();
 currentCoords = latLngsToCoords(currentLatLngs, originalFeature.geometry.type);
 currentCenter = calculateCenterFromCoords(currentCoords, originalFeature.geometry.type);
-	
+	});
     map.on('mousemove', function(e) {
         if (!isDragging) return;
         
