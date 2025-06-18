@@ -621,8 +621,8 @@ function makeDraggable(layer, originalFeature) {
     let isDragging = false;
     let dragStartLatLng = null;
     
-    const originalCoords = JSON.parse(JSON.stringify(originalFeature.geometry.coordinates));
-    const originalCenter = calculateCenterFromCoords(originalCoords, originalFeature.geometry.type);
+let currentCoords = JSON.parse(JSON.stringify(originalFeature.geometry.coordinates));
+let currentCenter = calculateCenterFromCoords(currentCoords, originalFeature.geometry.type);
     
     layer.on('mousedown', function(e) {
         isDragging = true;
