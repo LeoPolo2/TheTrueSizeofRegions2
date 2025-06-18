@@ -1,0 +1,788 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GeoContext Atlas - Enhanced</title>
+
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+     integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+     crossorigin=""/>
+
+    <style>
+        body {
+            padding: 0;
+            margin: 0;
+        }
+
+        html, body, #map {
+            height: 100%;
+            width: 100%;
+            background-color: #f0f0f0;
+        }
+
+        #controls {
+            position: absolute;
+            top: 10px;
+            left: 50px;
+            z-index: 1000;
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+            min-width: 280px;
+        }
+
+        #search-container {
+            position: relative;
+            margin-bottom: 10px;
+        }
+
+        #search-box {
+            width: 100%;
+            padding: 8px 12px;
+            border: 2px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+            box-sizing: border-box;
+        }
+
+        #search-box:focus {
+            outline: none;
+            border-color: #4CAF50;
+        }
+
+        #clear-button {
+            background-color: #f44336;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background-color 0.3s;
+        }
+
+        #clear-button:hover {
+            background-color: #da190b;
+        }
+
+        #search-results {
+            position: absolute;
+            top: 100%;
+            left: 0;
+            right: 0;
+            background: white;
+            border: 1px solid #ddd;
+            border-top: none;
+            border-radius: 0 0 4px 4px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            max-height: 200px;
+            overflow-y: auto;
+            z-index: 1001;
+        }
+
+        #search-results div {
+            cursor: pointer;
+            padding: 10px 12px;
+            border-bottom: 1px solid #eee;
+            display: flex;
+            align-items: center;
+            font-size: 14px;
+        }
+
+        #search-results div:last-child {
+            border-bottom: none;
+        }
+
+        #search-results div:hover {
+            background-color: #f8f9fa;
+        }
+
+        #search-results div.selected {
+            background-color: #e3f2fd;
+        }
+
+        .flag-icon {
+            width: 20px;
+            height: 15px;
+            margin-right: 8px;
+            border-radius: 2px;
+            flex-shrink: 0;
+        }
+
+        .loading {
+            font-style: italic;
+            color: #666;
+            text-align: center;
+        }
+
+        .error {
+            color: #f44336;
+            text-align: center;
+        }
+
+        .no-results {
+            font-style: italic;
+            color: #666;
+            text-align: center;
+        }
+
+        /* Tooltip styles */
+        .leaflet-tooltip {
+            background: rgba(0, 0, 0, 0.8);
+            color: white;
+            border: none;
+            border-radius: 4px;
+            padding: 8px 12px;
+            font-size: 12px;
+        }
+
+        .leaflet-tooltip::before {
+            border-top-color: rgba(0, 0, 0, 0.8);
+        }
+
+        .tooltip-content {
+            display: flex;
+            align-items: center;
+        }
+
+        .tooltip-flag {
+            width: 16px;
+            height: 12px;
+            margin-right: 6px;
+            border-radius: 1px;
+        }
+    </style>
+</head>
+<body>
+    <div id="controls">
+        <div id="search-container">
+            <input type="text" id="search-box" placeholder="Search for countries, states, provinces...">
+            <div id="search-results"></div>
+        </div>
+        <button id="clear-button">Clear Map</button>
+    </div>
+    <div id="map"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+     integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+     crossorigin=""></script>
+
+<script>
+const palette = ['#e6194B', '#3cb44b', '#ffe119', '#4363d8', '#f58231', '#911eb4', '#42d4f4', '#f032e6'];
+let colorIndex = 0;
+
+// --- 1. INITIALIZE THE MAP ---
+const map = L.map('map').setView([20, 0], 2);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19,
+    attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+}).addTo(map);
+
+// --- 2. SETUP SEARCH AND DATA LOADING ---
+const searchBox = document.getElementById('search-box');
+const searchResults = document.getElementById('search-results');
+const clearButton = document.getElementById('clear-button');
+
+let searchableData = [];
+let geojsonLayers = {};
+let statesCache = new Map();
+let activePolygons = [];
+let selectedIndex = -1;
+
+// Load initial data from Natural Earth
+loadInitialData();
+
+async function loadInitialData() {
+    try {
+        // Load countries from Natural Earth API (high resolution)
+        const countriesResponse = await fetch('https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_50m_admin_0_countries.geojson');
+        const countries = await countriesResponse.json();
+        
+        // Process countries with flag support
+        countries.features.forEach(feature => {
+            const countryName = feature.properties.NAME || feature.properties.ADMIN;
+            const countryCode = feature.properties.ISO_A2;
+            
+            searchableData.push({
+                name: countryName,
+                type: 'Country',
+                countryCode: countryCode,
+                geojsonFeature: feature,
+                loadType: 'immediate'
+            });
+        });
+
+        // Add predefined states/provinces
+        addPredefinedStates();
+        
+        console.log(`Loaded ${searchableData.length} searchable items`);
+        
+    } catch (error) {
+        console.error('Error loading initial data:', error);
+        await loadFromBackupSource();
+    }
+}
+
+async function loadFromBackupSource() {
+    try {
+        // Backup source for countries
+        const response = await fetch('https://raw.githubusercontent.com/holtzy/D3-graph-gallery/master/DATA/world_countries_410m.geojson');
+        const countries = await response.json();
+        
+        countries.features.forEach(feature => {
+            searchableData.push({
+                name: feature.properties.NAME,
+                type: 'Country',
+                countryCode: getCountryCode(feature.properties.NAME),
+                geojsonFeature: feature,
+                loadType: 'immediate'
+            });
+        });
+
+        addPredefinedStates();
+        console.log('Loaded data from backup source');
+        
+    } catch (error) {
+        console.error('Failed to load from backup source:', error);
+    }
+}
+
+function addPredefinedStates() {
+    const popularStates = [
+        // US States
+        { name: 'California', type: 'US State', country: 'US', adminLevel: 4 },
+        { name: 'Texas', type: 'US State', country: 'US', adminLevel: 4 },
+        { name: 'Florida', type: 'US State', country: 'US', adminLevel: 4 },
+        { name: 'New York', type: 'US State', country: 'US', adminLevel: 4 },
+        { name: 'Alaska', type: 'US State', country: 'US', adminLevel: 4 },
+        { name: 'Montana', type: 'US State', country: 'US', adminLevel: 4 },
+        { name: 'Wyoming', type: 'US State', country: 'US', adminLevel: 4 },
+        
+        // Canadian Provinces
+        { name: 'Ontario', type: 'Province', country: 'CA', adminLevel: 4 },
+        { name: 'Quebec', type: 'Province', country: 'CA', adminLevel: 4 },
+        { name: 'British Columbia', type: 'Province', country: 'CA', adminLevel: 4 },
+        { name: 'Alberta', type: 'Province', country: 'CA', adminLevel: 4 },
+        
+        // Australian States
+        { name: 'Queensland', type: 'State', country: 'AU', adminLevel: 4 },
+        { name: 'New South Wales', type: 'State', country: 'AU', adminLevel: 4 },
+        { name: 'Victoria', type: 'State', country: 'AU', adminLevel: 4 },
+        { name: 'Western Australia', type: 'State', country: 'AU', adminLevel: 4 },
+        
+        // European regions
+        { name: 'Bavaria', type: 'State', country: 'DE', adminLevel: 4 },
+        { name: 'Catalonia', type: 'Region', country: 'ES', adminLevel: 4 },
+        { name: 'Tuscany', type: 'Region', country: 'IT', adminLevel: 4 },
+        { name: 'Île-de-France', type: 'Region', country: 'FR', adminLevel: 4 },
+        { name: 'Scotland', type: 'Country', country: 'GB', adminLevel: 4 },
+        { name: 'Wales', type: 'Country', country: 'GB', adminLevel: 4 },
+        
+        // Other regions
+        { name: 'Rajasthan', type: 'State', country: 'IN', adminLevel: 4 },
+        { name: 'Maharashtra', type: 'State', country: 'IN', adminLevel: 4 },
+        { name: 'São Paulo', type: 'State', country: 'BR', adminLevel: 4 },
+        { name: 'Rio de Janeiro', type: 'State', country: 'BR', adminLevel: 4 },
+    ];
+
+    popularStates.forEach(state => {
+        searchableData.push({
+            name: state.name,
+            type: state.type,
+            country: state.country,
+            countryCode: state.country,
+            adminLevel: state.adminLevel,
+            loadType: 'api'
+        });
+    });
+}
+
+// --- 3. SEARCH FUNCTIONALITY ---
+searchBox.addEventListener('input', (e) => {
+    const query = e.target.value.toLowerCase();
+    selectedIndex = -1;
+    displaySearchResults(query);
+});
+
+searchBox.addEventListener('keydown', (e) => {
+    const results = searchResults.children;
+    
+    if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        selectedIndex = Math.min(selectedIndex + 1, results.length - 1);
+        updateSelection();
+    } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        selectedIndex = Math.max(selectedIndex - 1, -1);
+        updateSelection();
+    } else if (e.key === 'Enter') {
+        e.preventDefault();
+        if (selectedIndex >= 0 && selectedIndex < results.length) {
+            results[selectedIndex].click();
+        } else if (results.length > 0) {
+            results[0].click();
+        }
+    } else if (e.key === 'Escape') {
+        searchResults.innerHTML = '';
+        searchBox.blur();
+    }
+});
+
+function displaySearchResults(query) {
+    searchResults.innerHTML = '';
+    if (query.length < 2) return;
+
+    const results = searchableData
+        .filter(item => item.name.toLowerCase().includes(query))
+        .slice(0, 10);
+
+    if (results.length === 0) {
+        const div = document.createElement('div');
+        div.className = 'no-results';
+        div.textContent = 'No results found';
+        searchResults.appendChild(div);
+        return;
+    }
+
+    results.forEach((item, index) => {
+        const div = document.createElement('div');
+        div.setAttribute('data-index', index);
+        
+        // Add flag
+        const flagImg = document.createElement('img');
+        flagImg.className = 'flag-icon';
+        flagImg.src = getFlagUrl(item.countryCode || item.country);
+        flagImg.alt = `${item.countryCode || item.country} flag`;
+        flagImg.onerror = () => {
+            flagImg.style.display = 'none';
+        };
+        
+        const textSpan = document.createElement('span');
+        textSpan.textContent = `${item.name} (${item.type})`;
+        
+        div.appendChild(flagImg);
+        div.appendChild(textSpan);
+        
+        div.onclick = async () => {
+            await handleSelection(item);
+            searchBox.value = '';
+            searchResults.innerHTML = '';
+        };
+        
+        searchResults.appendChild(div);
+    });
+}
+
+function updateSelection() {
+    const results = searchResults.children;
+    Array.from(results).forEach((div, index) => {
+        div.classList.toggle('selected', index === selectedIndex);
+    });
+}
+
+// --- 4. HANDLE SELECTION ---
+async function handleSelection(item) {
+    let feature;
+    
+    if (item.loadType === 'immediate') {
+        feature = item.geojsonFeature;
+        createDraggableClone(feature, item);
+    } else if (item.loadType === 'api') {
+        showLoading();
+        feature = await loadFromOverpassAPI(item);
+        hideLoading();
+        
+        if (!feature) {
+            showError('Failed to load. Try a different search.');
+            return;
+        }
+        
+        createDraggableClone(feature, item);
+    }
+}
+
+function showLoading() {
+    searchResults.innerHTML = '<div class="loading">Loading...</div>';
+}
+
+function hideLoading() {
+    searchResults.innerHTML = '';
+}
+
+function showError(message) {
+    searchResults.innerHTML = `<div class="error">${message}</div>`;
+    setTimeout(() => {
+        searchResults.innerHTML = '';
+    }, 3000);
+}
+
+// --- 5. API LOADING FUNCTIONS ---
+async function loadFromOverpassAPI(item) {
+    const cacheKey = `${item.country}-${item.name}`;
+    
+    if (statesCache.has(cacheKey)) {
+        return statesCache.get(cacheKey);
+    }
+
+    try {
+        // Enhanced Overpass query with better filtering
+        const query = `
+            [out:json][timeout:20];
+            (
+              relation["name"~"${item.name}"]["admin_level"="${item.adminLevel}"]["boundary"="administrative"];
+              relation["name:en"~"${item.name}"]["admin_level"="${item.adminLevel}"]["boundary"="administrative"];
+            );
+            out geom;
+        `;
+
+        const response = await fetch(`https://overpass-api.de/api/interpreter?data=${encodeURIComponent(query)}`);
+        
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        
+        const data = await response.json();
+        
+        if (data.elements && data.elements.length > 0) {
+            let bestMatch = findBestMatch(data.elements, item.name);
+            const feature = await overpassToGeoJSON(bestMatch);
+            
+            if (feature) {
+                statesCache.set(cacheKey, feature);
+                return feature;
+            }
+        }
+    } catch (error) {
+        console.error('Overpass API error:', error);
+    }
+    
+    // Fallback to Nominatim
+    return await loadFromNominatim(item);
+}
+
+function findBestMatch(elements, targetName) {
+    // First, try exact match
+    for (let element of elements) {
+        if (element.tags && element.tags.name && 
+            element.tags.name.toLowerCase() === targetName.toLowerCase()) {
+            return element;
+        }
+    }
+    
+    // Then try English name match
+    for (let element of elements) {
+        if (element.tags && element.tags['name:en'] && 
+            element.tags['name:en'].toLowerCase() === targetName.toLowerCase()) {
+            return element;
+        }
+    }
+    
+    // Return first element if no exact match
+    return elements[0];
+}
+
+async function loadFromNominatim(item) {
+    try {
+        const query = `${item.name}, ${getCountryFullName(item.country)}`;
+        const response = await fetch(
+            `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=geojson&polygon_geojson=1&limit=1&addressdetails=1`
+        );
+        
+        const data = await response.json();
+        
+        if (data.features && data.features.length > 0) {
+            return data.features[0];
+        }
+    } catch (error) {
+        console.error('Nominatim API error:', error);
+    }
+    
+    return null;
+}
+
+async function overpassToGeoJSON(element) {
+    if (!element.members || !element.tags) {
+        return null;
+    }
+
+    try {
+        const coordinates = [];
+        const outerWays = element.members.filter(m => m.role === 'outer');
+        
+        for (let way of outerWays) {
+            if (way.geometry && way.geometry.length > 0) {
+                const coords = way.geometry.map(node => [node.lon, node.lat]);
+                if (coords.length > 2) {
+                    coordinates.push(coords);
+                }
+            }
+        }
+
+        if (coordinates.length === 0) {
+            return null;
+        }
+
+        return {
+            type: 'Feature',
+            properties: {
+                name: element.tags.name || element.tags['name:en'] || 'Unknown',
+                admin_level: element.tags.admin_level
+            },
+            geometry: {
+                type: coordinates.length === 1 ? 'Polygon' : 'MultiPolygon',
+                coordinates: coordinates.length === 1 ? coordinates : [coordinates]
+            }
+        };
+    } catch (error) {
+        console.error('Error converting Overpass data:', error);
+        return null;
+    }
+}
+
+// --- 6. DRAGGABLE CLONE CREATION ---
+function createDraggableClone(geojsonFeature, item) {
+    const style = {
+        color: palette[colorIndex % palette.length],
+        weight: 2,
+        fillColor: palette[colorIndex % palette.length],
+        fillOpacity: 0.5,
+        interactive: true
+    };
+    colorIndex++;
+
+    const clone = L.geoJSON(geojsonFeature, { 
+        style: style,
+        onEachFeature: function(feature, layer) {
+            makeDraggable(layer, feature);
+            
+            // Add tooltip with flag
+            const tooltipContent = createTooltipContent(item);
+            layer.bindTooltip(tooltipContent, {
+                permanent: false,
+                direction: 'top',
+                className: 'custom-tooltip'
+            });
+        }
+    }).addTo(map);
+
+    activePolygons.push(clone);
+    map.flyToBounds(clone.getBounds(), { maxZoom: 8, duration: 0.5 });
+}
+
+function createTooltipContent(item) {
+    const container = document.createElement('div');
+    container.className = 'tooltip-content';
+    
+    const flagImg = document.createElement('img');
+    flagImg.className = 'tooltip-flag';
+    flagImg.src = getFlagUrl(item.countryCode || item.country);
+    flagImg.alt = 'flag';
+    flagImg.onerror = () => {
+        flagImg.style.display = 'none';
+    };
+    
+    const textSpan = document.createElement('span');
+    textSpan.textContent = item.name;
+    
+    container.appendChild(flagImg);
+    container.appendChild(textSpan);
+    
+    return container;
+}
+
+// --- 7. CLEAR MAP FUNCTIONALITY ---
+clearButton.addEventListener('click', () => {
+    activePolygons.forEach(polygon => {
+        map.removeLayer(polygon);
+    });
+    activePolygons = [];
+    colorIndex = 0;
+});
+
+// --- 8. DRAGGING FUNCTIONALITY ---
+function makeDraggable(layer, originalFeature) {
+    let isDragging = false;
+    let dragStartLatLng = null;
+    
+    const originalCoords = JSON.parse(JSON.stringify(originalFeature.geometry.coordinates));
+    const originalCenter = calculateCenterFromCoords(originalCoords, originalFeature.geometry.type);
+    
+    layer.on('mousedown', function(e) {
+        isDragging = true;
+        dragStartLatLng = e.latlng;
+        map.dragging.disable();
+        map.off('click');
+        map.getContainer().style.cursor = 'grabbing';
+        L.DomEvent.stopPropagation(e);
+    });
+
+    map.on('mousemove', function(e) {
+        if (!isDragging) return;
+        
+        const currentLatLng = e.latlng;
+        const deltaLat = currentLatLng.lat - dragStartLatLng.lat;
+        const deltaLng = currentLatLng.lng - dragStartLatLng.lng;
+        
+        const newCenter = L.latLng(originalCenter.lat + deltaLat, originalCenter.lng + deltaLng);
+        const transformedCoords = transformCoordinates(originalCoords, originalCenter, newCenter, originalFeature.geometry.type);
+        const newLatLngs = coordsToLatLngs(transformedCoords, originalFeature.geometry.type);
+        layer.setLatLngs(newLatLngs);
+    });
+
+    map.on('mouseup', function() {
+        if (isDragging) {
+            isDragging = false;
+            map.dragging.enable();
+            map.getContainer().style.cursor = '';
+        }
+    });
+
+    map.on('mouseleave', function() {
+        if (isDragging) {
+            isDragging = false;
+            map.dragging.enable();
+            map.getContainer().style.cursor = '';
+        }
+    });
+}
+
+// --- 9. COORDINATE TRANSFORMATION ---
+function transformCoordinates(coords, originalCenter, newCenter, geometryType) {
+    const deltaLat = newCenter.lat - originalCenter.lat;
+    const deltaLng = newCenter.lng - originalCenter.lng;
+    
+    let translatedCoords;
+    if (geometryType === 'Polygon') {
+        translatedCoords = coords.map(ring => 
+            ring.map(coord => [coord[0] + deltaLng, coord[1] + deltaLat])
+        );
+    } else if (geometryType === 'MultiPolygon') {
+        translatedCoords = coords.map(polygon =>
+            polygon.map(ring => 
+                ring.map(coord => [coord[0] + deltaLng, coord[1] + deltaLat])
+            )
+        );
+    }
+    
+    return applyMercatorCorrection(translatedCoords, originalCenter, newCenter, geometryType);
+}
+
+function applyMercatorCorrection(coords, originalCenter, newCenter, geometryType) {
+    const originalLat = Math.abs(originalCenter.lat);
+    const newLat = Math.abs(newCenter.lat);
+    
+    const clampedOriginalLat = Math.min(Math.max(originalLat, 0.1), 85);
+    const clampedNewLat = Math.min(Math.max(newLat, 0.1), 85);
+    
+    const originalScale = 1 / Math.cos(clampedOriginalLat * Math.PI / 180);
+    const newScale = 1 / Math.cos(clampedNewLat * Math.PI / 180);
+    const scaleFactor = newScale / originalScale;
+    
+    if (Math.abs(scaleFactor - 1) < 0.01) {
+        return coords;
+    }
+    
+    function scaleRing(ring) {
+        return ring.map(coord => {
+            const dLng = coord[0] - newCenter.lng;
+            const dLat = coord[1] - newCenter.lat;
+            
+            return [
+                newCenter.lng + dLng * scaleFactor,
+                newCenter.lat + dLat
+            ];
+        });
+    }
+    
+    if (geometryType === 'Polygon') {
+        return coords.map(ring => scaleRing(ring));
+    } else if (geometryType === 'MultiPolygon') {
+        return coords.map(polygon => 
+            polygon.map(ring => scaleRing(ring))
+        );
+    }
+    
+    return coords;
+}
+
+// --- 10. HELPER FUNCTIONS ---
+function calculateCenterFromCoords(coords, geometryType) {
+    let totalLat = 0, totalLng = 0, count = 0;
+    
+    function processRing(ring) {
+        ring.forEach(coord => {
+            totalLng += coord[0];
+            totalLat += coord[1];
+            count++;
+        });
+    }
+    
+    if (geometryType === 'Polygon') {
+        coords.forEach(ring => processRing(ring));
+    } else if (geometryType === 'MultiPolygon') {
+        coords.forEach(polygon => {
+            polygon.forEach(ring => processRing(ring));
+        });
+    }
+    
+    return L.latLng(totalLat / count, totalLng / count);
+}
+
+function coordsToLatLngs(coords, geometryType) {
+    if (geometryType === 'Polygon') {
+        return coords.map(ring => ring.map(coord => L.latLng(coord[1], coord[0])));
+    } else if (geometryType === 'MultiPolygon') {
+        return coords.map(polygon => 
+            polygon.map(ring => ring.map(coord => L.latLng(coord[1], coord[0])))
+        );
+    }
+}
+
+function getFlagUrl(countryCode) {
+    if (!countryCode) return '';
+    return `https://flagcdn.com/24x18/${countryCode.toLowerCase()}.png`;
+}
+
+function getCountryFullName(code) {
+    const countries = {
+        'US': 'United States',
+        'CA': 'Canada',
+        'AU': 'Australia',
+        'DE': 'Germany',
+        'ES': 'Spain',
+        'IT': 'Italy',
+        'FR': 'France',
+        'GB': 'United Kingdom',
+        'IN': 'India',
+        'BR': 'Brazil'
+    };
+    return countries[code] || code;
+}
+
+function getCountryCode(countryName) {
+    const codes = {
+        'United States': 'US',
+        'Canada': 'CA',
+        'Australia': 'AU',
+        'Germany': 'DE',
+        'Spain': 'ES',
+        'Italy': 'IT',
+        'France': 'FR',
+        'United Kingdom': 'GB',
+        'India': 'IN',
+        'Brazil': 'BR'
+    };
+    return codes[countryName] || '';
+}
+
+// Hide search results when clicking outside
+document.addEventListener('click', (e) => {
+    if (!e.target.closest('#controls')) {
+        searchResults.innerHTML = '';
+    }
+});
+</script>
+</body>
+</html>
